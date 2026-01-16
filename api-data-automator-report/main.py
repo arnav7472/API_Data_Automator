@@ -2,6 +2,13 @@ import requests
 import pandas as pd
 from datetime import datetime
 import os
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet
+import matplotlib.pyplot as plt
+import dataframe_image as dfi
 
 API_URL = "https://api.coingecko.com/api/v3/coins/markets"
 
@@ -38,7 +45,9 @@ def fetch_data():
 
 def transform_data(raw):
     log("Transforming data...")
-    df = pd.DataFrame(raw)
+    df_raw = pd.DataFrame(raw)
+
+    df = df_raw.copy()
 
     # Keep only useful columns
     df = df[[
@@ -59,20 +68,67 @@ def transform_data(raw):
     # Sort by market cap
     df = df.sort_values(by="market_cap", ascending=False).reset_index(drop=True)
 
-    return df
+    return df_raw, df
 
-def export_reports(df: pd.DataFrame):
+def generate_pdf(df: pd.DataFrame, pdf_path: str):
+    doc = SimpleDocTemplate(pdf_path, pagesize=letter)
+    styles = getSampleStyleSheet()
+    elements = []
+
+    # Title
+    title = Paragraph("Crypto Market Report", styles['Title'])
+    elements.append(title)
+
+    # Timestamp
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    subtitle = Paragraph(f"Generated: {ts}", styles['Normal'])
+    elements.append(subtitle)
+
+    # Table data
+    data = [df.columns.tolist()] + df.values.tolist()
+    table = Table(data)
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 14),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    elements.append(table)
+
+    doc.build(elements)
+
+def generate_chart(df: pd.DataFrame, chart_path: str):
+    plt.figure(figsize=(10, 6))
+    plt.bar(df['symbol'], df['current_price'], color='skyblue')
+    plt.title('Current Prices of Cryptocurrencies')
+    plt.xlabel('Symbol')
+    plt.ylabel('Price (USD)')
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig(chart_path)
+    plt.close()
+
+def export_reports(df_raw: pd.DataFrame, df_cleaned: pd.DataFrame):
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
     csv_path = f"{OUTPUT_DIR}/report_{ts}.csv"
     html_path = f"{OUTPUT_DIR}/report_{ts}.html"
     json_path = f"{OUTPUT_DIR}/report_{ts}.json"
+    pdf_path = f"{OUTPUT_DIR}/report_{ts}.pdf"
+    chart_path = f"{OUTPUT_DIR}/chart_{ts}.png"
+    before_img_path = f"{OUTPUT_DIR}/before_data_{ts}.png"
+    after_img_path = f"{OUTPUT_DIR}/after_data_{ts}.png"
+    csv_img_path = f"{OUTPUT_DIR}/csv_preview_{ts}.png"
 
     log(f"Saving CSV: {csv_path}")
-    df.to_csv(csv_path, index=False)
+    df_cleaned.to_csv(csv_path, index=False)
 
     log(f"Saving JSON: {json_path}")
-    df.to_json(json_path, orient="records", indent=2, date_format="iso")
+    df_cleaned.to_json(json_path, orient="records", indent=2, date_format="iso")
 
     log(f"Saving HTML: {html_path}")
     html = f"""
@@ -90,7 +146,7 @@ def export_reports(df: pd.DataFrame):
     <body>
         <h1>Crypto Market Report</h1>
         <p><b>Generated:</b> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
-        {df.to_html(index=False)}
+        {df_cleaned.to_html(index=False)}
     </body>
     </html>
     """
@@ -98,13 +154,31 @@ def export_reports(df: pd.DataFrame):
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(html)
 
+    # Generate PDF
+    log(f"Generating PDF: {pdf_path}")
+    generate_pdf(df_cleaned, pdf_path)
+
+    # Generate chart
+    log(f"Generating chart: {chart_path}")
+    generate_chart(df_cleaned, chart_path)
+
+    # Generate data screenshots
+    log(f"Generating before data screenshot: {before_img_path}")
+    dfi.export(df_raw.head(10), before_img_path, table_conversion='matplotlib')
+
+    log(f"Generating after data screenshot: {after_img_path}")
+    dfi.export(df_cleaned.head(10), after_img_path, table_conversion='matplotlib')
+
+    log(f"Generating CSV preview screenshot: {csv_img_path}")
+    dfi.export(df_cleaned.head(10), csv_img_path, table_conversion='matplotlib')
+
     log("Export complete.")
 
 def main():
     try:
         raw = fetch_data()
-        df = transform_data(raw)
-        export_reports(df)
+        df_raw, df_cleaned = transform_data(raw)
+        export_reports(df_raw, df_cleaned)
         log("Run finished successfully.")
     except Exception as e:
         log(f"ERROR: {e}")
